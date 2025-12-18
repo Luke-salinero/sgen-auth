@@ -1,0 +1,24 @@
+# ============================
+# Web framework
+# ============================
+fastapi
+
+# ASGI server
+uvicorn[standard]
+
+# ============================
+# Auth / crypto
+# ============================
+python-jose[cryptography]
+passlib[bcrypt]
+
+# ============================
+# Validation / parsing
+# ============================
+pydantic>=2.6
+
+# ============================
+# Linting / formatting
+# ============================
+black
+ruff
