@@ -1,0 +1,14 @@
+# ============================
+# Auth / JWT keys
+# ============================
+jwt_private.key
+jwt_public.key
+jwks.json
+*.jwk
+
+# ============================
+# Local databases
+# ============================
+*.db
+*.sqlite
+*.sqlite3
