@@ -171,3 +171,14 @@ jwks.json
 *.db
 *.sqlite
 *.sqlite3
+*.sql
+
+#==============
+#Scripts
+#==============
+/scripts
+
+#==============
+#Tests
+#==============
+/tests
