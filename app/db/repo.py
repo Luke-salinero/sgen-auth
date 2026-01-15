@@ -1,8 +1,6 @@
-from __future__ import annotations
-
 import sqlite3
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Any, Literal, Mapping, Optional
 
 OwnerType = Literal["user", "workspace"]
 Status = Literal["active", "revoked"]
@@ -14,6 +12,7 @@ class ApiKeyRow:
     owner_type: OwnerType
     owner_id: str
     name: str
+    api_key: str
     keycloak_client_id: str
     status: Status
     created_by_user_id: Optional[str]
@@ -28,6 +27,7 @@ def _row_to_api_key(row: sqlite3.Row) -> ApiKeyRow:
         owner_type=row["owner_type"],
         owner_id=row["owner_id"],
         name=row["name"],
+        api_key=row["api_key"],
         keycloak_client_id=row["keycloak_client_id"],
         status=row["status"],
         created_by_user_id=row["created_by_user_id"],
@@ -44,7 +44,7 @@ class AuthRepo:
     def get_api_key_by_client_id(self, client_id: str) -> Optional[ApiKeyRow]:
         sql = """
         SELECT
-          id, owner_type, owner_id, name, keycloak_client_id, status,
+          id, owner_type, owner_id, name, api_key, keycloak_client_id, status,
           created_by_user_id, created_at, last_used_at, revoked_at
         FROM api_keys
         WHERE keycloak_client_id = ?
@@ -54,10 +54,23 @@ class AuthRepo:
         row = cur.fetchone()
         return _row_to_api_key(row) if row else None
 
+    def get_api_key_by_api_key(self, api_key: str) -> Optional[ApiKeyRow]:
+        sql = """
+        SELECT
+          id, owner_type, owner_id, name, api_key, keycloak_client_id, status,
+          created_by_user_id, created_at, last_used_at, revoked_at
+        FROM api_keys
+        WHERE api_key = ?
+        LIMIT 1
+        """
+        cur = self._conn.execute(sql, (api_key,))
+        row = cur.fetchone()
+        return _row_to_api_key(row) if row else None
+
     def list_api_keys(self, owner_type: OwnerType, owner_id: str) -> list[ApiKeyRow]:
         sql = """
         SELECT
-          id, owner_type, owner_id, name, keycloak_client_id, status,
+          id, owner_type, owner_id, name, api_key, keycloak_client_id, status,
           created_by_user_id, created_at, last_used_at, revoked_at
         FROM api_keys
         WHERE owner_type = ? AND owner_id = ?
@@ -73,14 +86,15 @@ class AuthRepo:
         owner_type: OwnerType,
         owner_id: str,
         name: str,
+        api_key: str,
         keycloak_client_id: str,
         created_by_user_id: Optional[str] = None,
     ) -> None:
         sql = """
         INSERT INTO api_keys (
-          id, owner_type, owner_id, name, keycloak_client_id,
+          id, owner_type, owner_id, name, api_key, keycloak_client_id,
           status, created_by_user_id
-        ) VALUES (?, ?, ?, ?, ?, 'active', ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?)
         """
         self._conn.execute(
             sql,
@@ -89,6 +103,7 @@ class AuthRepo:
                 owner_type,
                 owner_id,
                 name,
+                api_key,
                 keycloak_client_id,
                 created_by_user_id,
             ),
@@ -110,3 +125,59 @@ class AuthRepo:
         WHERE keycloak_client_id = ? AND status = 'active'
         """
         self._conn.execute(sql, (client_id,))
+
+    def upsert_api_key_from_claims(
+        self, claims: Mapping[str, Any], *, api_key: str
+    ) -> None:
+        api_key_id = claims.get("sub")
+        if not api_key_id:
+            raise ValueError("JWT missing required claim: sub")
+
+        keycloak_client_id = claims.get("azp") or claims.get("client_id")
+        if not keycloak_client_id:
+            raise ValueError("JWT missing required claim: azp/client_id")
+
+        owner_id = (
+            claims.get("user_email")
+            or claims.get("api_key_owner")
+            or claims.get("preferred_username")
+            or "unknown"
+        )
+
+        # Upsert keyed on keycloak_client_id:
+        # - If new client_id -> insert row with JWT sub as id
+        # - If existing client_id -> UPDATE that row, adopting the JWT sub as id,
+        # rotating api_key, touching last_used
+        sql = """
+        INSERT INTO api_keys (
+        id, owner_type, owner_id, name, api_key, keycloak_client_id,status,last_used_at
+        )
+        VALUES (
+        :id, :owner_type, :owner_id, :name, :api_key, :keycloak_client_id, 'active',
+        strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        )
+        ON CONFLICT(keycloak_client_id) DO UPDATE SET
+        id = excluded.id,
+        last_used_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+        status = 'active',
+        owner_type = excluded.owner_type,
+        owner_id = excluded.owner_id,
+        name = excluded.name,
+        api_key = excluded.api_key,
+        revoked_at = NULL;
+        """
+        params = {
+            "id": api_key_id,  # stable sub
+            "owner_type": "user",
+            "owner_id": owner_id,
+            "name": claims.get("client_id") or keycloak_client_id,
+            "api_key": api_key,  # rotatable
+            "keycloak_client_id": keycloak_client_id,
+        }
+
+        try:
+            self._conn.execute(sql, params)
+        except sqlite3.IntegrityError as e:
+            # Now the main possible remaining collision is UNIQUE(api_key)
+            # if you reuse a key across clients.
+            raise ValueError(f"api_keys upsert failed: {e}") from e
