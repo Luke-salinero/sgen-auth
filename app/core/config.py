@@ -21,6 +21,7 @@ class Settings:
 
     # ---- Optional validator hop ----
     validator_base: str = os.getenv("VALIDATOR_BASE", "http://127.0.0.1:9100")
+    ENTITLEMENTS_BASE: str = os.getenv("ENTITLEMENTS_BASE", "http://127.0.0.1:8000")
 
     # ---- HTTP ----
     http_timeout_seconds: int = int(os.getenv("HTTP_TIMEOUT_SECONDS", "15"))
