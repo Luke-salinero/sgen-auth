@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import os
-import re
+import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 @dataclass(frozen=True)
@@ -24,13 +27,12 @@ def _die(msg: str) -> None:
     raise KeycloakApiError(msg)
 
 
-def _slugify(s: str) -> str:
-    s = s.strip().lower()
-    s = re.sub(r"[^a-z0-9]+", "-", s)
-    s = re.sub(r"-+", "-", s).strip("-")
-    if not s:
-        _die("username produced an empty slug")
-    return s
+def stable_client_id(prefix: str, email: str, length: int = 10) -> str:
+    get_namespace = os.getenv("UUID_NAMESPACE")
+    namespace = uuid.UUID(get_namespace)
+    norm = email.strip().lower()
+    u = uuid.uuid5(namespace, norm)
+    return f"{prefix}-{u.hex[:length]}"
 
 
 def get_admin_token(keycloak_base: str, admin_user: str, admin_pass: str) -> str:
@@ -91,7 +93,8 @@ def get_client_rep(
 def get_client_secret(
     keycloak_base: str, realm: str, token: str, client_uuid: str
 ) -> str:
-    url = f"{keycloak_base}/admin/realms/{realm}/clients/{client_uuid}/client-secret"
+    url_prefix = f"{keycloak_base}/admin/realms/{realm}"
+    url = url_prefix + f"/clients/{client_uuid}/client-secret"
     headers = {"Authorization": f"Bearer {token}"}
     r = requests.get(url, headers=headers, timeout=15)
     if r.status_code != 200:
@@ -105,7 +108,8 @@ def get_client_secret(
 def rotate_client_secret(
     keycloak_base: str, realm: str, token: str, client_uuid: str
 ) -> str:
-    url = f"{keycloak_base}/admin/realms/{realm}/clients/{client_uuid}/client-secret"
+    url_prefix = f"{keycloak_base}/admin/realms/{realm}"
+    url = url_prefix + f"/clients/{client_uuid}/client-secret"
     headers = {"Authorization": f"Bearer {token}"}
     r = requests.post(url, headers=headers, timeout=15)
     if r.status_code != 200:
@@ -119,8 +123,8 @@ def rotate_client_secret(
 def get_service_account_user(
     keycloak_base: str, realm: str, token: str, client_uuid: str
 ) -> Dict[str, Any]:
-    url = f"""{keycloak_base}/admin/realms/{realm}/clients/{client_uuid}/
-    service-account-user"""
+    url_prefix = f"{keycloak_base}/admin/realms/{realm}"
+    url = url_prefix + f"/clients/{client_uuid}/service-account-user"
     headers = {"Authorization": f"Bearer {token}"}
     r = requests.get(url, headers=headers, timeout=15)
     if r.status_code != 200:
@@ -148,6 +152,12 @@ def update_user_attributes_bulk(
         attrs[k] = [v]
     rep["attributes"] = attrs
 
+    # Currently gives "User already has that email" error. Come back and look
+    # ways to combat this -----
+    # if "email" in attributes:
+    #     rep["email"] = attributes["email"]
+    #     rep["emailVerified"] = True
+
     r = requests.put(url, headers=headers, json=rep, timeout=15)
     if r.status_code != 204:
         _die(f"Failed to update user attributes ({r.status_code}): {r.text}")
@@ -156,8 +166,8 @@ def update_user_attributes_bulk(
 def list_protocol_mappers(
     keycloak_base: str, realm: str, token: str, client_uuid: str
 ) -> list[Dict[str, Any]]:
-    url = f"""{keycloak_base}/admin/realms/{realm}/clients/{client_uuid}/
-    protocol-mappers/models"""
+    url_prefix = f"{keycloak_base}/admin/realms/{realm}/clients"
+    url = url_prefix + f"/{client_uuid}/protocol-mappers/models"
     headers = {"Authorization": f"Bearer {token}"}
     r = requests.get(url, headers=headers, timeout=15)
     if r.status_code != 200:
@@ -168,8 +178,8 @@ def list_protocol_mappers(
 def create_protocol_mapper(
     keycloak_base: str, realm: str, token: str, client_uuid: str, mapper: Dict[str, Any]
 ) -> None:
-    url = f"""{keycloak_base}/admin/realms/{realm}/clients/{client_uuid}/
-    protocol-mappers/models"""
+    url_prefix = f"{keycloak_base}/admin/realms/{realm}/clients"
+    url = url_prefix + f"/{client_uuid}/protocol-mappers/models"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     r = requests.post(url, json=mapper, headers=headers, timeout=15)
     if r.status_code not in (201, 204):
@@ -184,8 +194,8 @@ def update_protocol_mapper(
     mapper_id: str,
     mapper: Dict[str, Any],
 ) -> None:
-    url = f"""{keycloak_base}/admin/realms/{realm}/clients/{client_uuid}/
-    protocol-mappers/models/{mapper_id}"""
+    url_prefix = f"{keycloak_base}/admin/realms/{realm}/clients"
+    url = url_prefix + f"/{client_uuid}/protocol-mappers/models/{mapper_id}"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     r = requests.put(url, json=mapper, headers=headers, timeout=15)
     if r.status_code != 204:
@@ -246,7 +256,7 @@ def ensure_user_attribute_mapper(
 
 
 def generate_api_key_if_missing(
-    *, username: str, email: str, rotate_secret: bool = False
+    *, username: str, email: str, rotate_secret: bool
 ) -> ApiKeyResult:
     """
     Idempotent behavior:
@@ -258,19 +268,22 @@ def generate_api_key_if_missing(
     realm = os.getenv("KEYCLOAK_REALM", "sgen-test")
     admin_user = os.getenv("KEYCLOAK_ADMIN_USER", "admin")
     admin_pass = os.getenv("KEYCLOAK_ADMIN_PASSWORD", "admin")
-
     if not username.strip():
         _die("username is required")
     if not email.strip():
         _die("email is required")
 
-    client_id = f"sgen-api-{_slugify(username)}"
+    prefix = "sgen-api"
+    client_id = stable_client_id(prefix=prefix, email=email, length=7)
 
     token = get_admin_token(keycloak_base, admin_user, admin_pass)
 
     # 1) Ensure client exists
     create_client_if_missing(keycloak_base, realm, token, client_id)
     client_rep = get_client_rep(keycloak_base, realm, token, client_id)
+    if not client_rep:
+        _die(f"Client {client_id} not found after create.")
+
     client_uuid = client_rep["id"]
 
     # 2) Ensure service-account user attributes are set
@@ -278,8 +291,7 @@ def generate_api_key_if_missing(
     svc_user_id = svc_user.get("id")
     if not svc_user_id:
         _die("Service account user had no id.")
-
-    attrs_to_set = {"api_key_owner": username, "email": email}
+    attrs_to_set = {"api_key_owner": username, "api_key_email": email}
     update_user_attributes_bulk(keycloak_base, realm, token, svc_user_id, attrs_to_set)
 
     # 3) Ensure mappers exist for api_key_owner + email
@@ -297,16 +309,15 @@ def generate_api_key_if_missing(
         realm,
         token,
         client_uuid,
-        user_attr="email",
-        claim_name="email",
-        mapper_name="usermodel-email",
+        user_attr="api_key_email",
+        claim_name="api_key_email",
+        mapper_name="usermodel-api-key-email",
     )
-
     # 4) Secret
     if rotate_secret:
         secret = rotate_client_secret(keycloak_base, realm, token, client_uuid)
     else:
-        get_client_secret(keycloak_base, realm, token, client_uuid)
+        secret = get_client_secret(keycloak_base, realm, token, client_uuid)
 
     api_key = f"{client_id}:{secret}"
     return ApiKeyResult(
