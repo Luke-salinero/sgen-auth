@@ -9,7 +9,6 @@ router = APIRouter()
 
 class ApiKeyRequest(BaseModel):
     rotate: bool = False
-    email_key: bool = True
 
 
 @router.post("/keys")
@@ -29,14 +28,11 @@ def api_keys(req: ApiKeyRequest, request: Request):
             rotate_secret=req.rotate,
         )
 
-        if req.email_key:
-            subject = "New SGEN API Key" if req.rotate else "SGEN API Key"
-            body = f"Here is your SGEN API key:\n\n{res.api_key}\n\n"
-            if req.rotate:
-                body += (
-                    "This key was rotated. Your previous API key is now invalid.\n\n"
-                )
-            send_email(to=email, subject=subject, body=body)
+        subject = "New SGEN API Key" if req.rotate else "SGEN API Key"
+        body = f"Here is your SGEN API key:\n\n{res.api_key}\n\n"
+        if req.rotate:
+            body += "This key was rotated. Your previous API key is now invalid.\n\n"
+        send_email(to=email, subject=subject, body=body)
 
         return {"client_id": res.client_id, "rotated": req.rotate}
     except AuthenticationError as e:
