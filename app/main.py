@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.routes.api_keys import router as keys_router
 from app.api.v1.routes.mint import router as mint_router
+from app.db.init_db import init_db
 
 load_dotenv()
 
@@ -11,6 +12,7 @@ load_dotenv()
 def create_app() -> FastAPI:
     app = FastAPI()
 
+    init_db()
     # This is added as Broswer send OPTION prior
     # essentially asking for privilege.
     # Middleware tells the browser they have privilege
