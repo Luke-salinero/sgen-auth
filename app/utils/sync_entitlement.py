@@ -4,21 +4,16 @@ import os
 import requests
 
 logger = logging.getLogger(__name__)
-ENTITLEMENTS_BASE = os.getenv("ENTITLEMENTS_BASE", "http://127.0.0.1:8000")
+ENTITLEMENTS_BASE = os.getenv("ENTITLEMENTS_BASE", "http://127.0.0.1:8001")
 
 
 def _sync_entitlements(
     *, claims: dict, api_key: str, default_tier: str = "free"
 ) -> None:
     payload = {
-        "user_id": claims.get("sub"),
+        "user_id": claims.get("api_key_owner"),
         "api_key": api_key,
-        "account_name": (
-            claims.get("user_email")
-            or claims.get("api_key_owner")
-            or claims.get("preferred_username")
-            or "unknown"
-        ),
+        "account_name": (claims.get("api_key_email") or "unknown"),
         "default_tier": default_tier,
     }
 

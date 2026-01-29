@@ -68,6 +68,19 @@ class AuthRepo:
         row = cur.fetchone()
         return _row_to_api_key(row) if row else None
 
+    def get_api_key_by_sub(self, sub: str) -> Optional[ApiKeyRow]:
+        sql = """
+        SELECT
+          id, owner_type, owner_id, name, api_key, keycloak_client_id, status,
+          created_by_user_id, created_at, last_used_at, revoked_at
+        FROM api_keys
+        WHERE id = ?
+        LIMIT 1
+        """
+        cur = self._conn.execute(sql, (sub,))
+        row = cur.fetchone()
+        return _row_to_api_key(row) if row else None
+
     def list_api_keys(self, owner_type: OwnerType, owner_id: str) -> list[ApiKeyRow]:
         sql = """
         SELECT
@@ -144,7 +157,6 @@ class AuthRepo:
         if not keycloak_client_id:
             raise ValueError("Missing required keycloak client id")
         owner_id = claims.get("sub")
-
         sql = """
         INSERT INTO api_keys (
         id, owner_type, owner_id, name,api_key,keycloak_client_id,status,last_used_at
@@ -168,7 +180,7 @@ class AuthRepo:
             "id": api_key_id,  # user sub (stable)
             "owner_type": "user",
             "owner_id": owner_id,  # also sub (stable)
-            "name": claims.get("email"),  # store minted client id
+            "name": (claims.get("api_key_email") or claims.get("email")),
             "api_key": api_key,  # rotatable
             "keycloak_client_id": keycloak_client_id,  # MUST be minted client id
         }
