@@ -48,7 +48,10 @@ class Settings:
         "JWT_JWKS_URL",
         "http://127.0.0.1:8080/realms/sgen-test/protocol/openid-connect/certs",
     )
-    jwt_public_key: str = _env("JWT_PUBLIC_KEY", "public_key")
+    # No insecure default here: if JWT_JWKS_URL is ever unset, decode_jwt.py's
+    # legacy HS256 fallback path checks jwt_public_key itself and refuses to
+    # verify tokens rather than silently trusting a guessable constant.
+    jwt_public_key: str | None = os.getenv("JWT_PUBLIC_KEY")
 
     # Optional: small clock skew leeway (seconds) for exp/nbf checks
     jwt_leeway_seconds: int = int(os.getenv("JWT_LEEWAY_SECONDS", "0"))

@@ -79,6 +79,10 @@ def verify_access_token(token: str) -> Mapping[str, object]:
                 options=options or None,
             )
         else:
+            if not settings.jwt_public_key:
+                raise InvalidAuthenticationError(
+                    "Server misconfigured: JWT_JWKS_URL and JWT_PUBLIC_KEY are both unset"
+                )
             claims = jwt.decode(
                 token,
                 key=settings.jwt_public_key,
@@ -144,6 +148,10 @@ def _authenticate_bearer(auth_header: str) -> Identity:
             )
         else:
             # Old path (HS256 or manually-provided key)
+            if not settings.jwt_public_key:
+                raise InvalidAuthenticationError(
+                    "Server misconfigured: JWT_JWKS_URL and JWT_PUBLIC_KEY are both unset"
+                )
             claims = jwt.decode(
                 token,
                 key=settings.jwt_public_key,

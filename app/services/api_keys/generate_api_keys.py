@@ -267,7 +267,9 @@ def generate_api_key_if_missing(
     keycloak_base = os.getenv("KEYCLOAK_BASE", "http://127.0.0.1:8080").rstrip("/")
     realm = os.getenv("KEYCLOAK_REALM", "sgen-test")
     admin_user = os.getenv("KEYCLOAK_ADMIN_USER", "admin")
-    admin_pass = os.getenv("KEYCLOAK_ADMIN_PASSWORD", "admin")
+    admin_pass = os.getenv("KEYCLOAK_ADMIN_PASSWORD")
+    if not admin_pass:
+        _die("KEYCLOAK_ADMIN_PASSWORD is not set")
     if not username.strip():
         _die("username is required")
     if not email.strip():
