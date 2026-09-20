@@ -3,11 +3,11 @@
 Authentication and authorization service for the sgen platform.
 
 This service is responsible for:
-- Issuing and validating JWTs
-- API key parsing and validation
-- Integrating with Keycloak for identity verification
-- Resolving and syncing entitlement data
-- Providing authentication-related API endpoints
+- Minting short-lived JWTs from an API key (`client_id:client_secret`) via Keycloak's client-credentials grant
+- Self-service API key issuance/rotation for Keycloak-SSO-authenticated users, rate-limited per subject
+- Provisioning the Keycloak confidential client + protocol mappers behind each API key
+- Syncing newly-minted subjects into `sgen-entitlement`
+- Emailing newly minted/rotated keys to the owning account
 
 ## Tech Stack
 - Python
@@ -20,28 +20,26 @@ This service is responsible for:
 ```
 sgen-auth/
 ├── app/
-│   ├── api/
-│   │   └── v1/
-│   │       └── routes/
-│   │           └── mint.py
+│   ├── api/v1/routes/
+│   │   ├── mint.py        # POST /v1/mint
+│   │   └── api_keys.py    # POST /v1/keys
 │   ├── core/
 │   │   └── config.py
-│   ├── data/
-│   │   └── auth.db
 │   ├── db/
-│   │   ├── connection.py
-│   │   ├── dbConn.py
-│   │   ├── repo.py
-│   │   └── schema.sql
+│   │   ├── connection.py  # sqlite3 connection helper (used by init_db)
+│   │   ├── dbConn.py      # FastAPI Depends: get_db / get_repo
+│   │   ├── init_db.py     # runs app/db/schema.sql on startup
+│   │   └── repo.py        # AuthRepo - all parameterized SQL lives here
 │   ├── services/
 │   │   ├── api_keys/
-│   │   │   └── parser.py
+│   │   │   ├── generate_api_keys.py  # Keycloak client/secret provisioning
+│   │   │   └── parser.py             # parses "ApiKey client_id:client_secret"
 │   │   └── keycloak/
-│   │       └── validator.py
+│   │       └── validator.py          # client_credentials grant against Keycloak
 │   ├── utils/
-│   │   ├── decode_jwt.py
-│   │   ├── sync_entitlements.py
-│   │   └── time.py
+│   │   ├── decode_jwt.py       # bearer-JWT verification (JWKS/RS256)
+│   │   ├── sync_entitlement.py # POSTs new subjects to sgen-entitlement
+│   │   └── send_email.py       # SMTP delivery of minted/rotated keys
 │   └── main.py
 ├── requirements.txt
 ├── README.md
@@ -49,10 +47,10 @@ sgen-auth/
 
 ## Responsibilities
 This service:
-- Authenticates incoming requests
-- Validates JWTs and API keys
-- Mints JWTs for authenticated identities
-- Integrates external identity providers (Keycloak)
+- Validates API keys and bearer JWTs
+- Mints JWTs for validated API keys (`POST /v1/mint`)
+- Issues/rotates API keys for authenticated Keycloak identities (`POST /v1/keys`)
+- Integrates with Keycloak as the identity provider
 
 ## Setup
 
@@ -93,11 +91,14 @@ DB_PATH=app/data/auth.db
 ```
 
 ## Database
-- SQLite is used for local development
-- Schema is defined in `app/db/schema.sql`
+- SQLite is used for local development; all access goes through `AuthRepo` (`app/db/repo.py`) with parameterized queries.
+- `init_db()` (`app/db/init_db.py`) runs on every startup and expects `app/db/schema.sql` to exist — **that file is not currently checked into this repo**, so a clean clone/deploy will fail at startup until it's added or `init_db()` is changed to create the schema another way.
 
 ## API Overview
-- POST /api/v1/mint — Issues a JWT for a validated identity
+| Method | Path | Description |
+| ------ | ---- | ----------- |
+| `POST` | `/v1/mint` | Exchanges an API key (`Authorization: ApiKey client_id:client_secret`) for a JWT via Keycloak's client-credentials grant. |
+| `POST` | `/v1/keys` | Mints or rotates the caller's API key (`Authorization: Bearer <JWT>`, Keycloak SSO). Rate-limited to 1 request/minute per subject; emails the key to the caller's `email` claim. |
 
 ## Development Notes
 - Business logic is kept out of route handlers
@@ -105,5 +106,6 @@ DB_PATH=app/data/auth.db
 
 ## Security Notes
 - Secrets and private keys must never be committed
-- JWT validation is enforced server-side
+- JWT validation is enforced server-side (audience + issuer + signature, via JWKS)
+- `KEYCLOAK_ADMIN_PASSWORD` has no default; it must be set explicitly for `/v1/keys` to be able to provision Keycloak clients
 
